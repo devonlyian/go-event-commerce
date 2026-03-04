@@ -1,0 +1,127 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: commerce-postgres
+    environment:
+      POSTGRES_DB: commerce
+      POSTGRES_USER: commerce
+      POSTGRES_PASSWORD: commerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commerce -d commerce"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.1
+    container_name: commerce-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: commerce-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: commerce-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8088:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: commerce-kafka-init
+    depends_on:
+      - kafka
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      echo 'waiting for kafka';
+      cub kafka-ready -b kafka:9092 1 120;
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic order.created --partitions 1 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic payment.completed --partitions 1 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic payment.failed --partitions 1 --replication-factor 1;
+      kafka-topics --bootstrap-server kafka:9092 --list;
+      "
+
+  order-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/order-service.Dockerfile
+    container_name: commerce-order-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    environment:
+      HTTP_PORT: 8080
+      POSTGRES_DSN: host=postgres user=commerce password=commerce dbname=commerce port=5432 sslmode=disable TimeZone=UTC
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_ORDER_CREATED: order.created
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/payment-service.Dockerfile
+    container_name: commerce-payment-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8081:8081"
+    environment:
+      HTTP_PORT: 8081
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_ORDER_CREATED: order.created
+      KAFKA_TOPIC_PAYMENT_COMPLETED: payment.completed
+      KAFKA_TOPIC_PAYMENT_FAILED: payment.failed
+      KAFKA_GROUP_ID: payment-service
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/notification-service.Dockerfile
+    container_name: commerce-notification-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8082:8082"
+    environment:
+      HTTP_PORT: 8082
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPICS: payment.completed,payment.failed
+      KAFKA_GROUP_ID: notification-service
+
+volumes:
+  postgres-data:
