@@ -1,0 +1,34 @@
+# OS
+.DS_Store
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Go build/test artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.txt
+*.coverprofile
+
+# Logs / temp
+*.log
+tmp/
+temp/
+
+# Docker overrides
+docker-compose.override.yml
