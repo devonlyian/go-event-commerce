@@ -1,0 +1,9 @@
+go 1.26.0
+
+use (
+	./libs/contracts
+	./libs/platform
+	./services/notification-service
+	./services/order-service
+	./services/payment-service
+)
