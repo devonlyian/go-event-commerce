@@ -34,3 +34,14 @@ func (r *OrderRepository) GetByID(ctx context.Context, id string) (*model.Order,
 	}
 	return &order, nil
 }
+
+func (r *OrderRepository) UpdateStatusIfCurrent(ctx context.Context, id, currentStatus, nextStatus string) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&model.Order{}).
+		Where("id = ? AND status = ?", id, currentStatus).
+		Update("status", nextStatus)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}

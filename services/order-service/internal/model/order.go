@@ -2,6 +2,21 @@ package model
 
 import "time"
 
+const (
+	StatusCreated       = "created"
+	StatusPaid          = "paid"
+	StatusPaymentFailed = "payment_failed"
+)
+
+func IsTerminalStatus(status string) bool {
+	switch status {
+	case StatusPaid, StatusPaymentFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 type Order struct {
 	ID         string    `gorm:"type:uuid;primaryKey" json:"id"`
 	CustomerID string    `gorm:"size:64;not null" json:"customer_id"`
