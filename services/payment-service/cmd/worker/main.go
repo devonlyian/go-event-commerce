@@ -18,8 +18,18 @@ import (
 	"github.com/devonlyian/go-event-commerce/services/payment-service/internal/repository"
 	"github.com/devonlyian/go-event-commerce/services/payment-service/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
+
+type orderCreatedConsumer interface {
+	FetchMessage(ctx context.Context) (kafka.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+}
+
+type orderCreatedProcessor interface {
+	ProcessOrderCreated(ctx context.Context, event model.OrderCreatedEvent) (string, error)
+}
 
 func main() {
 	cfg := config.Load()
@@ -86,12 +96,20 @@ func main() {
 	}()
 
 	workerDone := make(chan struct{})
+	workerErrCh := make(chan error, 1)
 	go func() {
 		defer close(workerDone)
-		consumeLoop(ctx, consumer, processor, logger)
+		if err := consumeLoop(ctx, consumer, processor, logger); err != nil && !errors.Is(err, context.Canceled) {
+			workerErrCh <- err
+			stop()
+		}
 	}()
 
-	<-ctx.Done()
+	var workerErr error
+	select {
+	case <-ctx.Done():
+	case workerErr = <-workerErrCh:
+	}
 	logger.Info("shutdown signal received")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -101,40 +119,57 @@ func main() {
 	}
 
 	<-workerDone
+	if workerErr != nil {
+		logger.Fatal("payment-service stopped due to worker failure", zap.Error(workerErr))
+	}
 	logger.Info("payment-service stopped")
 }
 
 func consumeLoop(
 	ctx context.Context,
-	consumer *repository.KafkaConsumer,
-	processor *service.PaymentProcessor,
+	consumer orderCreatedConsumer,
+	processor orderCreatedProcessor,
 	logger *zap.Logger,
-) {
+) error {
 	for {
-		msg, err := consumer.ReadMessage(ctx)
+		msg, err := consumer.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				return
+				return ctx.Err()
 			}
-			logger.Warn("failed to read kafka message", zap.Error(err))
-			continue
+			return fmt.Errorf("fetch kafka message: %w", err)
 		}
 
-		var event model.OrderCreatedEvent
-		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			logger.Warn("invalid order.created payload",
-				zap.Error(err),
-				zap.ByteString("raw", msg.Value),
-			)
-			continue
+		shouldCommit, err := handleOrderCreatedMessage(ctx, msg, processor, logger)
+		if err != nil {
+			return err
 		}
-
-		if _, err := processor.ProcessOrderCreated(ctx, event); err != nil {
-			logger.Error("failed to process payment",
-				zap.Error(err),
-				zap.String("order_id", event.OrderID),
-			)
-			continue
+		if shouldCommit {
+			if err := consumer.CommitMessages(ctx, msg); err != nil {
+				return fmt.Errorf("commit kafka message: %w", err)
+			}
 		}
 	}
+}
+
+func handleOrderCreatedMessage(
+	ctx context.Context,
+	msg kafka.Message,
+	processor orderCreatedProcessor,
+	logger *zap.Logger,
+) (bool, error) {
+	var event model.OrderCreatedEvent
+	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		logger.Warn("invalid order.created payload",
+			zap.Error(err),
+			zap.ByteString("raw", msg.Value),
+		)
+		return true, nil
+	}
+
+	if _, err := processor.ProcessOrderCreated(ctx, event); err != nil {
+		return false, fmt.Errorf("process payment for order %s: %w", event.OrderID, err)
+	}
+
+	return true, nil
 }

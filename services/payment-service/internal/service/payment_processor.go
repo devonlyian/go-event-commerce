@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"hash/fnv"
 	"time"
 
 	"github.com/devonlyian/go-event-commerce/services/payment-service/internal/model"
@@ -20,7 +20,6 @@ type PaymentProcessor struct {
 	publisher      PaymentPublisher
 	completedTopic string
 	failedTopic    string
-	rng            *rand.Rand
 	logger         *zap.Logger
 }
 
@@ -33,20 +32,15 @@ func NewPaymentProcessor(
 		publisher:      publisher,
 		completedTopic: completedTopic,
 		failedTopic:    failedTopic,
-		rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
 		logger:         logger,
 	}
 }
 
 func (p *PaymentProcessor) ProcessOrderCreated(ctx context.Context, event model.OrderCreatedEvent) (string, error) {
-	status := "completed"
+	status, reason := paymentOutcomeForOrder(event.OrderID)
 	topic := p.completedTopic
-	reason := ""
-
-	if p.rng.Float64() < 0.2 {
-		status = "failed"
+	if status == "failed" {
 		topic = p.failedTopic
-		reason = "card authorization failed (simulated)"
 	}
 
 	paymentEvent := model.PaymentEvent{
@@ -75,4 +69,13 @@ func (p *PaymentProcessor) ProcessOrderCreated(ctx context.Context, event model.
 	)
 
 	return status, nil
+}
+
+func paymentOutcomeForOrder(orderID string) (string, string) {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(orderID))
+	if hasher.Sum32()%5 == 0 {
+		return "failed", "card authorization failed (deterministic)"
+	}
+	return "completed", ""
 }

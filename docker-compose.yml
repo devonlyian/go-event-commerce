@@ -88,6 +88,11 @@ services:
       POSTGRES_DSN: host=postgres user=commerce password=commerce dbname=commerce port=5432 sslmode=disable TimeZone=UTC
       KAFKA_BROKERS: kafka:9092
       KAFKA_TOPIC_ORDER_CREATED: order.created
+      KAFKA_TOPIC_PAYMENT_COMPLETED: payment.completed
+      KAFKA_TOPIC_PAYMENT_FAILED: payment.failed
+      KAFKA_GROUP_ID_PAYMENT_RESULTS: order-service-payment-results
+      OUTBOX_RELAY_INTERVAL: 5s
+      OUTBOX_BATCH_SIZE: 10
 
   payment-service:
     build:

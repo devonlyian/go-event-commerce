@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/devonlyian/go-event-commerce/libs/contracts/events"
 	"github.com/devonlyian/go-event-commerce/libs/platform/logging"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/config"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/handler"
@@ -49,6 +52,16 @@ func main() {
 			logger.Warn("failed to close kafka publisher", zap.Error(err))
 		}
 	}()
+	paymentResultConsumer := service.NewKafkaConsumer(
+		cfg.KafkaBrokers,
+		cfg.KafkaPaymentResultGroup,
+		[]string{cfg.KafkaPaymentCompletedTopic, cfg.KafkaPaymentFailedTopic},
+	)
+	defer func() {
+		if err := paymentResultConsumer.Close(); err != nil {
+			logger.Warn("failed to close payment result consumer", zap.Error(err))
+		}
+	}()
 
 	orderRepo := repository.NewOrderRepository(db)
 	outboxRepo := repository.NewOutboxRepository(db)
@@ -66,7 +79,10 @@ func main() {
 		if err := sqlDB.PingContext(checkCtx); err != nil {
 			return err
 		}
-		return publisher.CheckConnection(checkCtx)
+		if err := publisher.CheckConnection(checkCtx); err != nil {
+			return err
+		}
+		return paymentResultConsumer.CheckConnection(checkCtx)
 	})
 	healthHandler.Register(r)
 
@@ -89,7 +105,32 @@ func main() {
 		}
 	}()
 
-	<-ctx.Done()
+	workerErrCh := make(chan error, 2)
+	var workerWG sync.WaitGroup
+	workerWG.Add(2)
+
+	go func() {
+		defer workerWG.Done()
+		if err := runOutboxRelay(ctx, orderSvc, cfg.OutboxRelayInterval, cfg.OutboxBatchSize, logger); err != nil && !errors.Is(err, context.Canceled) {
+			workerErrCh <- fmt.Errorf("outbox relay worker failed: %w", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		defer workerWG.Done()
+		if err := runPaymentResultConsumer(ctx, paymentResultConsumer, orderSvc, logger); err != nil && !errors.Is(err, context.Canceled) {
+			workerErrCh <- fmt.Errorf("payment result consumer failed: %w", err)
+			stop()
+		}
+	}()
+
+	var workerErr error
+	select {
+	case <-ctx.Done():
+	case workerErr = <-workerErrCh:
+	}
+
 	logger.Info("shutdown signal received")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -98,9 +139,15 @@ func main() {
 		logger.Error("failed to shutdown http server", zap.Error(err))
 	}
 
+	workerWG.Wait()
+
 	sqlDB, err := db.DB()
 	if err == nil {
 		_ = sqlDB.Close()
+	}
+
+	if workerErr != nil {
+		logger.Fatal("order-service stopped due to worker failure", zap.Error(workerErr))
 	}
 
 	logger.Info("order-service stopped")
@@ -123,4 +170,77 @@ func openPostgresWithRetry(ctx context.Context, dsn string, logger *zap.Logger) 
 		}
 	}
 	return nil, fmt.Errorf("postgres connection failed: %w", lastErr)
+}
+
+type paymentResultApplier interface {
+	ApplyPaymentResult(ctx context.Context, event events.PaymentEvent, sourceTopic string) error
+}
+
+type outboxRelayer interface {
+	RelayPendingOutbox(ctx context.Context, batchSize int) (int, error)
+}
+
+func runOutboxRelay(
+	ctx context.Context,
+	relayer outboxRelayer,
+	interval time.Duration,
+	batchSize int,
+	logger *zap.Logger,
+) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		processed, err := relayer.RelayPendingOutbox(ctx, batchSize)
+		if err != nil {
+			return err
+		}
+		if processed > 0 {
+			logger.Info("outbox relay batch processed", zap.Int("count", processed))
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func runPaymentResultConsumer(
+	ctx context.Context,
+	consumer *service.KafkaConsumer,
+	applier paymentResultApplier,
+	logger *zap.Logger,
+) error {
+	for {
+		msg, err := consumer.FetchMessage(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return ctx.Err()
+			}
+			return fmt.Errorf("fetch payment result message: %w", err)
+		}
+
+		var event events.PaymentEvent
+		if err := json.Unmarshal(msg.Value, &event); err != nil {
+			logger.Warn("invalid payment result payload",
+				zap.Error(err),
+				zap.String("topic", msg.Topic),
+				zap.ByteString("raw", msg.Value),
+			)
+			if err := consumer.CommitMessages(ctx, msg); err != nil {
+				return fmt.Errorf("commit invalid payment result message: %w", err)
+			}
+			continue
+		}
+
+		if err := applier.ApplyPaymentResult(ctx, event, msg.Topic); err != nil {
+			return fmt.Errorf("apply payment result for order %s: %w", event.OrderID, err)
+		}
+
+		if err := consumer.CommitMessages(ctx, msg); err != nil {
+			return fmt.Errorf("commit payment result message: %w", err)
+		}
+	}
 }

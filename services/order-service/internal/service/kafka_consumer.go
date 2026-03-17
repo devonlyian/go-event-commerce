@@ -1,4 +1,4 @@
-package repository
+package service
 
 import (
 	"context"
@@ -13,15 +13,21 @@ type KafkaConsumer struct {
 	brokers []string
 }
 
-func NewKafkaConsumer(brokers []string, groupID, topic string) *KafkaConsumer {
+func NewKafkaConsumer(brokers []string, groupID string, topics []string) *KafkaConsumer {
+	cfg := kafka.ReaderConfig{
+		Brokers:  brokers,
+		GroupID:  groupID,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	}
+	if len(topics) == 1 {
+		cfg.Topic = topics[0]
+	} else {
+		cfg.GroupTopics = topics
+	}
+
 	return &KafkaConsumer{
-		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers:  brokers,
-			GroupID:  groupID,
-			Topic:    topic,
-			MinBytes: 1,
-			MaxBytes: 10e6,
-		}),
+		reader:  kafka.NewReader(cfg),
 		brokers: brokers,
 	}
 }

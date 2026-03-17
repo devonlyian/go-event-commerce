@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/devonlyian/go-event-commerce/libs/contracts/events"
+	"github.com/devonlyian/go-event-commerce/libs/contracts/topics"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/model"
-	"github.com/devonlyian/go-event-commerce/services/order-service/internal/repository"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -36,16 +36,28 @@ func (e *EventPublishError) Unwrap() error {
 }
 
 type OrderService struct {
-	orderRepo         *repository.OrderRepository
-	outboxRepo        *repository.OutboxRepository
+	orderRepo         OrderRepository
+	outboxRepo        OutboxRepository
 	publisher         Publisher
 	orderCreatedTopic string
 	logger            *zap.Logger
 }
 
+type OrderRepository interface {
+	CreateWithOutbox(ctx context.Context, order *model.Order, event *model.OutboxEvent) error
+	GetByID(ctx context.Context, id string) (*model.Order, error)
+	UpdateStatusIfCurrent(ctx context.Context, id, currentStatus, nextStatus string) (bool, error)
+}
+
+type OutboxRepository interface {
+	MarkPublished(ctx context.Context, eventID string) error
+	SetPublishError(ctx context.Context, eventID, message string) error
+	ProcessPendingBatch(ctx context.Context, batchSize int, handler func(event *model.OutboxEvent) error) (int, error)
+}
+
 func NewOrderService(
-	orderRepo *repository.OrderRepository,
-	outboxRepo *repository.OutboxRepository,
+	orderRepo OrderRepository,
+	outboxRepo OutboxRepository,
 	publisher Publisher,
 	orderCreatedTopic string,
 	logger *zap.Logger,
@@ -64,7 +76,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) 
 		ID:         uuid.NewString(),
 		CustomerID: input.CustomerID,
 		Amount:     input.Amount,
-		Status:     "created",
+		Status:     model.StatusCreated,
 	}
 
 	eventPayload := events.OrderCreatedEvent{
@@ -115,4 +127,72 @@ func (s *OrderService) GetOrderByID(ctx context.Context, id string) (*model.Orde
 		return nil, fmt.Errorf("get order by id: %w", err)
 	}
 	return order, nil
+}
+
+func (s *OrderService) RelayPendingOutbox(ctx context.Context, batchSize int) (int, error) {
+	processed, err := s.outboxRepo.ProcessPendingBatch(ctx, batchSize, func(event *model.OutboxEvent) error {
+		return s.publisher.Publish(ctx, event.Topic, event.AggregateID, event.Payload)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("process pending outbox: %w", err)
+	}
+	return processed, nil
+}
+
+func (s *OrderService) ApplyPaymentResult(ctx context.Context, event events.PaymentEvent, sourceTopic string) error {
+	targetStatus, err := paymentStatusFromTopic(sourceTopic)
+	if err != nil {
+		return err
+	}
+
+	updated, err := s.orderRepo.UpdateStatusIfCurrent(ctx, event.OrderID, model.StatusCreated, targetStatus)
+	if err != nil {
+		return fmt.Errorf("update order status: %w", err)
+	}
+	if updated {
+		s.logger.Info("order status updated from payment result",
+			zap.String("order_id", event.OrderID),
+			zap.String("status", targetStatus),
+			zap.String("topic", sourceTopic),
+		)
+		return nil
+	}
+
+	order, err := s.orderRepo.GetByID(ctx, event.OrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.logger.Warn("received payment result for missing order",
+				zap.String("order_id", event.OrderID),
+				zap.String("topic", sourceTopic),
+			)
+			return nil
+		}
+		return fmt.Errorf("load order after status update miss: %w", err)
+	}
+
+	switch {
+	case order.Status == targetStatus:
+		return nil
+	case model.IsTerminalStatus(order.Status):
+		s.logger.Warn("ignored conflicting payment result for terminal order",
+			zap.String("order_id", event.OrderID),
+			zap.String("current_status", order.Status),
+			zap.String("incoming_status", targetStatus),
+			zap.String("topic", sourceTopic),
+		)
+		return nil
+	default:
+		return fmt.Errorf("unexpected order status transition from %s to %s", order.Status, targetStatus)
+	}
+}
+
+func paymentStatusFromTopic(topic string) (string, error) {
+	switch topic {
+	case topics.PaymentCompleted:
+		return model.StatusPaid, nil
+	case topics.PaymentFailed:
+		return model.StatusPaymentFailed, nil
+	default:
+		return "", fmt.Errorf("unsupported payment topic: %s", topic)
+	}
 }
