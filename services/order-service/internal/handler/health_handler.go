@@ -21,10 +21,25 @@ func (h *HealthHandler) Register(r *gin.Engine) {
 	r.GET("/readyz", h.readiness)
 }
 
+// liveness godoc
+// @Summary Liveness probe
+// @Description Returns OK when the process is alive.
+// @Tags health
+// @Produce json
+// @Success 200 {object} HealthResponseDoc
+// @Router /livez [get]
 func (h *HealthHandler) liveness(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// readiness godoc
+// @Summary Readiness probe
+// @Description Returns ready when dependencies are reachable.
+// @Tags health
+// @Produce json
+// @Success 200 {object} HealthResponseDoc
+// @Failure 503 {object} ReadinessFailureResponseDoc
+// @Router /readyz [get]
 func (h *HealthHandler) readiness(c *gin.Context) {
 	if h.readinessCheck == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})

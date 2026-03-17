@@ -1,0 +1,166 @@
+basePath: /
+definitions:
+  handler.CreateOrderRequestDoc:
+    properties:
+      amount:
+        example: 129.99
+        type: number
+      customer_id:
+        example: customer-001
+        type: string
+    type: object
+  handler.ErrorResponseDoc:
+    properties:
+      detail:
+        example: 'Key: ''CreateOrderRequestDoc.Amount'' Error:Field validation for
+          ''Amount'' failed on the ''gt'' tag'
+        type: string
+      error:
+        example: invalid request
+        type: string
+    type: object
+  handler.HealthResponseDoc:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+  handler.OrderAcceptedResponseDoc:
+    properties:
+      order:
+        $ref: '#/definitions/model.Order'
+      warning:
+        example: order persisted but event publish failed
+        type: string
+    type: object
+  handler.OrderResponseDoc:
+    properties:
+      order:
+        $ref: '#/definitions/model.Order'
+    type: object
+  handler.ReadinessFailureResponseDoc:
+    properties:
+      detail:
+        example: 'dial tcp 127.0.0.1:5432: connect: connection refused'
+        type: string
+      status:
+        example: not ready
+        type: string
+    type: object
+  model.Order:
+    properties:
+      amount:
+        type: number
+      created_at:
+        type: string
+      customer_id:
+        type: string
+      id:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: |-
+    Order API for the event-driven commerce practice project.
+    It persists orders, emits outbox events, and reflects asynchronous payment outcomes.
+  title: Go Event Commerce Order API
+  version: "1.0"
+paths:
+  /livez:
+    get:
+      description: Returns OK when the process is alive.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.HealthResponseDoc'
+      summary: Liveness probe
+      tags:
+      - health
+  /orders:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new order, persists an outbox event, and publishes order.created.
+      parameters:
+      - description: Order payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.CreateOrderRequestDoc'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/handler.OrderResponseDoc'
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/handler.OrderAcceptedResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handler.ErrorResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handler.ErrorResponseDoc'
+      summary: Create order
+      tags:
+      - orders
+  /orders/{id}:
+    get:
+      description: Returns the latest order state. Status can change asynchronously
+        after payment processing.
+      parameters:
+      - description: Order ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.OrderResponseDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handler.ErrorResponseDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handler.ErrorResponseDoc'
+      summary: Get order
+      tags:
+      - orders
+  /readyz:
+    get:
+      description: Returns ready when dependencies are reachable.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.HealthResponseDoc'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handler.ReadinessFailureResponseDoc'
+      summary: Readiness probe
+      tags:
+      - health
+swagger: "2.0"
