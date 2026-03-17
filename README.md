@@ -122,7 +122,11 @@ Generate Swagger docs:
 make swagger
 ```
 
-## 6. Kubernetes (kind)
+## 6. Retrospective
+
+- Spring -> Go retrospective: [SPRING_TO_GO_RETROSPECTIVE.md](./SPRING_TO_GO_RETROSPECTIVE.md)
+
+## 7. Kubernetes (kind)
 
 Kubernetes manifests in this starter run microservices on kind and reuse Kafka/PostgreSQL from Docker Compose via `host.docker.internal`.
 Keep `make up` running before applying Kubernetes manifests.
@@ -164,7 +168,7 @@ Delete cluster:
 make kind-down
 ```
 
-## 7. Service Responsibilities
+## 8. Service Responsibilities
 
 ### order-service
 
@@ -189,7 +193,7 @@ make kind-down
 - consumes payment result events
 - logs simulated notification dispatch
 
-## 8. Notes
+## 9. Notes
 
 - This starter intentionally keeps domain scope to order/payment/notification only.
 - If you want to add extra business capabilities, discuss first before implementation.
