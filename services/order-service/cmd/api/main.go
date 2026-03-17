@@ -1,4 +1,12 @@
+// @title Go Event Commerce Order API
+// @version 1.0
+// @description Order API for the event-driven commerce practice project.
+// @description It persists orders, emits outbox events, and reflects asynchronous payment outcomes.
+// @host localhost:8080
+// @BasePath /
 package main
+
+// Package main wires the order-service HTTP API and background workers.
 
 import (
 	"context"
@@ -14,12 +22,15 @@ import (
 
 	"github.com/devonlyian/go-event-commerce/libs/contracts/events"
 	"github.com/devonlyian/go-event-commerce/libs/platform/logging"
+	docs "github.com/devonlyian/go-event-commerce/services/order-service/docs"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/config"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/handler"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/model"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/repository"
 	"github.com/devonlyian/go-event-commerce/services/order-service/internal/service"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -70,6 +81,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	docs.SwaggerInfo.BasePath = "/"
 
 	healthHandler := handler.NewHealthHandler(func(checkCtx context.Context) error {
 		sqlDB, err := db.DB()
@@ -88,6 +100,7 @@ func main() {
 
 	orderHandler := handler.NewOrderHandler(orderSvc, logger)
 	orderHandler.Register(r)
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.HTTPPort),
