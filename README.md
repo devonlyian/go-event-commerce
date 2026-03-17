@@ -61,6 +61,11 @@ curl -s http://localhost:8081/readyz
 curl -s http://localhost:8082/readyz
 ```
 
+Open local UIs:
+
+- Order API Swagger UI: [http://localhost:8080/swagger/index.html](http://localhost:8080/swagger/index.html)
+- Kafka UI: [http://localhost:8088](http://localhost:8088)
+
 Create order:
 
 ```bash
@@ -75,9 +80,14 @@ Get order (replace `<order_id>`):
 curl -s http://localhost:8080/orders/<order_id>
 ```
 
-Kafka UI:
+`POST /orders` may return `202 Accepted` if the order was persisted but the initial Kafka publish failed.
+In that case the outbox relay retries publishing in the background, and the order status will still change asynchronously to `paid` or `payment_failed`.
 
-- [http://localhost:8088](http://localhost:8088)
+Smoke test the full flow:
+
+```bash
+bash scripts/run-curl-demo.sh
+```
 
 Stop:
 
@@ -104,6 +114,12 @@ Manual creation:
 ```bash
 make build
 make test
+```
+
+Generate Swagger docs:
+
+```bash
+make swagger
 ```
 
 ## 6. Kubernetes (kind)
@@ -154,9 +170,13 @@ make kind-down
 
 - `POST /orders`
 - `GET /orders/:id`
+- `GET /livez`
+- `GET /readyz`
+- `GET /swagger/index.html`
 - persists order in PostgreSQL
 - writes event to outbox table
 - publishes `order.created`
+- reflects payment result events back into order status
 
 ### payment-service
 

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build order-service image
+        run: docker build -f deploy/docker/order-service.Dockerfile -t order-service:ci .
+
+      - name: Build payment-service image
+        run: docker build -f deploy/docker/payment-service.Dockerfile -t payment-service:ci .
+
+      - name: Build notification-service image
+        run: docker build -f deploy/docker/notification-service.Dockerfile -t notification-service:ci .

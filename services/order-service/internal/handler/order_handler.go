@@ -29,6 +29,18 @@ func (h *OrderHandler) Register(r *gin.Engine) {
 	r.GET("/orders/:id", h.getOrderByID)
 }
 
+// createOrder godoc
+// @Summary Create order
+// @Description Creates a new order, persists an outbox event, and publishes order.created.
+// @Tags orders
+// @Accept json
+// @Produce json
+// @Param request body CreateOrderRequestDoc true "Order payload"
+// @Success 201 {object} OrderResponseDoc
+// @Success 202 {object} OrderAcceptedResponseDoc
+// @Failure 400 {object} ErrorResponseDoc
+// @Failure 500 {object} ErrorResponseDoc
+// @Router /orders [post]
 func (h *OrderHandler) createOrder(c *gin.Context) {
 	var req createOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -59,6 +71,16 @@ func (h *OrderHandler) createOrder(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"order": order})
 }
 
+// getOrderByID godoc
+// @Summary Get order
+// @Description Returns the latest order state. Status can change asynchronously after payment processing.
+// @Tags orders
+// @Produce json
+// @Param id path string true "Order ID"
+// @Success 200 {object} OrderResponseDoc
+// @Failure 404 {object} ErrorResponseDoc
+// @Failure 500 {object} ErrorResponseDoc
+// @Router /orders/{id} [get]
 func (h *OrderHandler) getOrderByID(c *gin.Context) {
 	id := c.Param("id")
 	order, err := h.orderService.GetOrderByID(c.Request.Context(), id)

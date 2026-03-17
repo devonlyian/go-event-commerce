@@ -2,7 +2,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 CLUSTER_NAME ?= commerce-dev
 
-.PHONY: up down restart logs ps test build kind-up kind-down kind-load-images k8s-apply k8s-delete topics
+.PHONY: up down restart logs ps test build swagger kind-up kind-down kind-load-images k8s-apply k8s-delete topics
 
 up:
 	$(COMPOSE) up -d --build
@@ -30,6 +30,9 @@ test:
 	cd services/order-service && go test ./...
 	cd services/payment-service && go test ./...
 	cd services/notification-service && go test ./...
+
+swagger:
+	cd services/order-service && go run github.com/swaggo/swag/cmd/swag@latest init -g main.go -d cmd/api,internal/handler,internal/model -o docs --parseInternal
 
 kind-up:
 	kind get clusters | grep -q "^$(CLUSTER_NAME)$$" || kind create cluster --name $(CLUSTER_NAME)
